@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Steam Controller Overlay</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: transparent;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Wrapper shrinks to the image's rendered size so hotspot
+       percentages are relative to the controller face, not the window. */
+    #controller-wrap {
+      position: relative;
+      display: inline-block;
+      line-height: 0;
+      transition: transform 0.05s linear;
+    }
+
+    #controller-img {
+      display: block;
+      max-width: 95vw;
+      max-height: 95vh;
+      width: auto;
+      height: auto;
+    }
+
+    #hotspot-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .hotspot {
+      position: absolute;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      background: transparent;
+      transition: opacity 0.04s, box-shadow 0.04s;
+      opacity: 0;
+    }
+
+    .hotspot.pressed {
+      opacity: 1;
+      box-shadow: 0 0 14px 5px var(--color);
+      background: color-mix(in srgb, var(--color) 40%, transparent);
+      border-color: var(--color);
+    }
+
+    /* Trigger bars — hidden during normal use, shown in calibration as reference */
+    .trigger-bar-wrap {
+      position: absolute;
+      transform: translate(-50%, 0);
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 3px;
+      overflow: hidden;
+      display: none;
+      align-items: flex-end;
+    }
+    body.calibrating .trigger-bar-wrap { display: flex; }
+    .trigger-bar-fill {
+      width: 100%;
+      height: 0%;
+      background: var(--color);
+      opacity: 0.75;
+      box-shadow: 0 0 8px 2px var(--color);
+      transition: height 0.03s linear;
+    }
+
+    /* Per-button sprite overlays — positioned by calibrated x/y/r */
+    .btn-overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      transition: opacity 0.05s, filter 0.05s;
+      pointer-events: none;
+    }
+    .btn-overlay.pressed {
+      opacity: 1;
+    }
+
+    /* When a button has a loaded image, hide the circle entirely */
+    .hotspot.has-image { opacity: 0 !important; }
+
+    /* Calibration: show circles, hide overlays */
+    body.calibrating .btn-overlay       { display: none !important; }
+    body.calibrating .hotspot.has-image { opacity: 0.7 !important; }
+
+    /* Trackpad / stick zones — border-radius set per-element in JS */
+    .analog-zone {
+      position: absolute;
+      border: 1px solid transparent;
+      overflow: hidden;
+    }
+    .analog-dot {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--color);
+      opacity: 0.85;
+      box-shadow: 0 0 6px 2px var(--color);
+      transition: left 0.03s linear, top 0.03s linear;
+      /* center by default (0,0 input) */
+      left: 50%;
+      top: 50%;
+    }
+
+    /* Calibration mode */
+    body.calibrating #hotspot-layer { pointer-events: all; }
+    body.calibrating .hotspot {
+      opacity: 0.7;
+      cursor: crosshair;
+      pointer-events: all;
+    }
+    body.calibrating .hotspot.selected {
+      opacity: 1;
+      border-color: #fff;
+      box-shadow: 0 0 12px 4px #fff;
+    }
+    body.calibrating .analog-zone {
+      pointer-events: all;
+      cursor: move;
+      border-color: rgba(255,255,255,0.35) !important;
+    }
+    body.calibrating .analog-zone.selected {
+      border-color: #fff;
+      box-shadow: 0 0 0 1px #fff;
+    }
+
+    #cal-panel {
+      display: none;
+      position: fixed;
+      bottom: 12px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.82);
+      color: #eee;
+      font: 13px/1.5 monospace;
+      padding: 10px 16px;
+      border-radius: 6px;
+      text-align: center;
+      pointer-events: all;
+      z-index: 999;
+    }
+    body.calibrating #cal-panel { display: block; }
+    #cal-panel button {
+      margin: 4px 4px 0;
+      padding: 3px 10px;
+      background: #333;
+      color: #eee;
+      border: 1px solid #666;
+      border-radius: 3px;
+      cursor: pointer;
+      font: inherit;
+    }
+    #cal-panel button:hover { background: #555; }
+  </style>
+</head>
+<body>
+  <div id="controller-wrap">
+    <img id="controller-img" src="images/controller.png" alt=""
+         onerror="this.style.display='none';
+                  this.parentElement.style.width='95vw';
+                  this.parentElement.style.height='95vh';">
+    <div id="hotspot-layer"></div>
+  </div>
+
+  <div id="cal-panel">
+    <strong>CALIBRATION MODE</strong><br>
+    <span id="cal-hint">Drag buttons · Click a zone: scroll=width, shift+scroll=height, ctrl+scroll=rotate</span>
+    <div id="zone-readout" style="display:none; color:#aaa; font-size:11px; margin-top:2px">
+      <span id="zr-name"></span>:
+      cx=<span id="zr-cx"></span> cy=<span id="zr-cy"></span>
+      hw=<span id="zr-hw"></span> hh=<span id="zr-hh"></span>
+      rot=<span id="zr-rot"></span>°
+    </div>
+    <div style="margin-top:6px">
+      <button id="cal-save">Save Layout</button>
+      <button id="cal-reset">Reset to Defaults</button>
+      <button id="cal-done">Done</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/overlay.js"></script>
+</body>
+</html>
