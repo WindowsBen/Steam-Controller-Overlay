@@ -402,6 +402,7 @@ async def main():
     dev = _find_active_device()
     if not dev:
         print("[server] No device found. Reconnect the controller and try again.")
+        input("\nPress Enter to exit...")
         sys.exit(1)
 
     print(f"[server] Connected: {dev.product_name}")
